@@ -1,1 +1,0 @@
-runtime-sandbox-builder alias --dockerfile_path Dockerfile --extension alias_sandbox.py
