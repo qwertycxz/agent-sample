@@ -15,7 +15,6 @@ Developers only need to focus on writing their own tool functions.
 """
 
 import json
-import os
 from contextlib import asynccontextmanager
 from typing import Any
 
@@ -25,6 +24,7 @@ from agentscope_runtime.engine.schemas.agent_schemas import Role
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from openai import AsyncOpenAI
+from openai.types.chat import ChatCompletionMessageFunctionToolCallParam, ChatCompletionMessageParam
 from pydantic import BaseModel
 from starlette.middleware.cors import CORSMiddleware
 
@@ -36,32 +36,8 @@ from deploy_starter.mcp_server import (
     mcp,
 )
 
-# ==================== Configuration Reading ====================
-
-
-def read_config():
-    """Read config.yml file"""
-    config_path = os.path.join(os.path.dirname(__file__), "config.yml")
-    config_data = {}
-    with open(config_path, encoding="utf-8") as config_file:
-        for line in config_file:
-            line = line.strip()
-            if line and not line.startswith("#"):
-                if ":" in line:
-                    key, value = line.split(":", 1)
-                    key = key.strip()
-                    value = value.strip().strip("\"'")
-                    if value.lower() == "true":
-                        value = True
-                    elif value.lower() == "false":
-                        value = False
-                    elif value.isdigit():
-                        value = int(value)
-                    config_data[key] = value
-    return config_data
-
-
-config = read_config()
+class CallParam(ChatCompletionMessageFunctionToolCallParam):
+    index: int
 
 # ==================== Create MCP ASGI Application ====================
 # Pre-create MCP application instance for reuse in lifespan and mount
@@ -80,8 +56,6 @@ async def lifespan(fastapi_app: FastAPI):
 
 # Create FastAPI application
 app = FastAPI(
-    title=config.get("APP_NAME", "MCP Server with Chat"),
-    debug=config.get("DEBUG", False),
     lifespan=lifespan,
 )
 
@@ -158,12 +132,7 @@ async def chat(request_data: ChatRequest):
     """
 
     # Get DashScope API Key
-    api_key = os.environ.get("DASHSCOPE_API_KEY")
-    if not api_key:
-        api_key = config.get("DASHSCOPE_API_KEY")
-
-    if not api_key:
-        return {"error": "DASHSCOPE_API_KEY not configured"}
+    api_key = "sk-dc3f5a4ae87047b6a6c46a0cbcb4187e"
 
     # Initialize OpenAI client (DashScope is compatible with OpenAI API)
     client = AsyncOpenAI(
@@ -174,7 +143,7 @@ async def chat(request_data: ChatRequest):
     # Convert message format to OpenAI format
     # Keep conversation history: user messages + assistant's final answer (type="message")
     # Ignore intermediate steps: plugin_call, plugin_call_output, reasoning
-    messages = []
+    messages: list[ChatCompletionMessageParam] = []
     for msg in request_data.input:
         # Process user messages
         if msg.role == "user":
@@ -224,22 +193,22 @@ async def chat(request_data: ChatRequest):
             # First phase: LLM initial response (may contain tool call decisions)
             if openai_tools:
                 response = await client.chat.completions.create(
-                    model=config.get("DASHSCOPE_MODEL_NAME", "qwen-plus"),
+                    model="qwen-plus",
                     messages=messages,
                     tools=openai_tools,
                     stream=True,
                 )
             else:
                 response = await client.chat.completions.create(
-                    model=config.get("DASHSCOPE_MODEL_NAME", "qwen-plus"),
+                    model="qwen-plus",
                     messages=messages,
                     stream=True,
                 )
 
             # Collect LLM response content and tool calls
             llm_content = ""
-            tool_calls = []
-            current_tool_call: dict[str, Any] | None = None
+            tool_calls: list[CallParam] = []
+            current_tool_call: CallParam | None = None
 
             async for chunk in response:
                 if chunk.choices and len(chunk.choices) > 0:
@@ -253,34 +222,35 @@ async def chat(request_data: ChatRequest):
                     # Collect tool calls
                     if delta.tool_calls:
                         for tool_call_chunk in delta.tool_calls:
-                            if tool_call_chunk.index is not None:
-                                if current_tool_call is None:
-                                    pass
-                                elif (
-                                    current_tool_call["index"]
-                                    != tool_call_chunk.index
-                                ):
-                                    tool_calls.append(current_tool_call)
-                                    current_tool_call = None
+                            if not tool_call_chunk.function:
+                                continue
+                            if current_tool_call is None:
+                                pass
+                            elif (
+                                current_tool_call["index"]
+                                != tool_call_chunk.index
+                            ):
+                                tool_calls.append(current_tool_call)
+                                current_tool_call = None
 
-                                if current_tool_call is None:
-                                    current_tool_call = {
-                                        "index": tool_call_chunk.index,
-                                        "id": tool_call_chunk.id or "",
-                                        "type": "function",
-                                        "function": {
-                                            "name": tool_call_chunk.function.name
-                                            or "",
-                                            "arguments": (
-                                                tool_call_chunk.function.arguments
-                                                or ""
-                                            ),
-                                        },
-                                    }
-                                elif tool_call_chunk.function.arguments:
-                                    current_tool_call["function"][
-                                        "arguments"
-                                    ] += tool_call_chunk.function.arguments
+                            if current_tool_call is None:
+                                current_tool_call = {
+                                    "index": tool_call_chunk.index,
+                                    "id": tool_call_chunk.id or "",
+                                    "type": "function",
+                                    "function": {
+                                        "name": tool_call_chunk.function.name
+                                        or "",
+                                        "arguments": (
+                                            tool_call_chunk.function.arguments
+                                            or ""
+                                        ),
+                                    },
+                                }
+                            elif tool_call_chunk.function.arguments:
+                                current_tool_call["function"][
+                                    "arguments"
+                                ] += tool_call_chunk.function.arguments
 
             if current_tool_call:
                 tool_calls.append(current_tool_call)
@@ -396,7 +366,7 @@ async def chat(request_data: ChatRequest):
 
                 # 6. Use tool results to call LLM again to generate final answer
                 final_response = await client.chat.completions.create(
-                    model=config.get("DASHSCOPE_MODEL_NAME", "qwen-plus"),
+                    model="qwen-plus",
                     messages=messages,
                     stream=True,
                 )
@@ -465,12 +435,7 @@ async def chat(request_data: ChatRequest):
 
 def run_app():
     """Entry point for running the application via command line."""
-    uvicorn.run(
-        "deploy_starter.main:app",
-        host=config.get("FC_START_HOST", "127.0.0.1"),
-        port=config.get("PORT", 8080),
-        reload=config.get("RELOAD", False),
-    )
+    uvicorn.run("deploy_starter.main:app", port=8080)
 
 
 if __name__ == "__main__":

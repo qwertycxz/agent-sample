@@ -21,6 +21,7 @@ from typing import Annotated, Any
 from agentscope_runtime.tools import ModelstudioSearchLite
 from agentscope_runtime.tools.searches import SearchLiteInput, SearchLiteOutput
 from fastmcp import Client, FastMCP
+from openai.types.chat import ChatCompletionToolUnionParam
 from pydantic import Field
 
 # ==================== Configuration Reading ====================
@@ -203,7 +204,7 @@ async def call_mcp_tool(tool_name: str, arguments: dict[str, Any]) -> Any:
 
 def convert_mcp_tools_to_openai_format(
     mcp_tools: list[dict[str, Any]],
-) -> list[dict[str, Any]]:
+) -> list[ChatCompletionToolUnionParam]:
     """
     Convert MCP tool format to OpenAI function calling format
     """
