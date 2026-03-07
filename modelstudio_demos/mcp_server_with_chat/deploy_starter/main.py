@@ -2,19 +2,35 @@ from agentscope_runtime.engine.helpers.agent_api_builder import ResponseBuilder
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
+from fastmcp import Client, FastMCP
 from json import dumps, loads
+from mcp import Tool
+from mcp.types import AudioContent, ImageContent, TextContent
 from openai import AsyncOpenAI, AsyncStream
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageFunctionToolCallParam, ChatCompletionMessageParam, ChatCompletionToolUnionParam
-from pydantic import BaseModel
-from typing import Any
-from deploy_starter.mcp_server import (
-	call_mcp_tool,
-	convert_mcp_tools_to_openai_format,
-	list_mcp_tools,
-	mcp,
-)
+from pydantic import BaseModel, Field
+from typing import Annotated, Any
 
 MODEL = 'qwen-plus'
+
+def getTool(tool: Tool) -> ChatCompletionToolUnionParam:
+	description = ''
+	if tool.description:
+		description = tool.description
+	return {
+		'function': {
+			'description': description,
+			'name': tool.name,
+			'parameters': tool.inputSchema,
+		},
+		'type': 'function',
+	}
+
+mcp = FastMCP()
+
+@mcp.tool(description = 'A simple addition tool example for calculating the sum of two integers', name = 'add Tool')
+def addNumbers(a: Annotated[int, Field(description='add a')], b: Annotated[int, Field(description='add b')]):
+	return a + b
 
 mcp_asgi_app = mcp.streamable_http_app('/')
 
@@ -59,13 +75,13 @@ def getMessage(msg: MessageItem) -> ChatCompletionMessageParam | None:
 		return
 	if msg.role == 'user':
 		return {
-			'role': 'user',
 			'content': content_text,
+			'role': 'user',
 		}
 	if msg.role == 'assistant' and msg.type == 'message':
 		return {
-			'role': 'assistant',
 			'content': content_text,
+			'role': 'assistant',
 		}
 
 class ChatRequest(BaseModel):
@@ -78,21 +94,17 @@ class ToolCall(ChatCompletionMessageFunctionToolCallParam):
 
 async def generateResponse(request_data: ChatRequest):
 	'''Generate streaming response - conforms to Bailian Response/Message/Content architecture'''
-	client = AsyncOpenAI(api_key = 'sk-dc3f5a4ae87047b6a6c46a0cbcb4187e', base_url = 'https://dashscope.aliyuncs.com/compatible-mode/v1')
+	client = AsyncOpenAI(api_key = 'sk-d0973d254ce8479eb0ef6a7fbd59663d', base_url = 'https://dashscope.aliyuncs.com/compatible-mode/v1')
 	messages: list[ChatCompletionMessageParam] = [message for msg in request_data.input if (message := getMessage(msg))]
 	response_builder = ResponseBuilder(request_data.session_id, f'resp_{request_data.session_id}')
 	yield f'data: {response_builder.created().model_dump_json()}\n\n'
 	yield f'data: {response_builder.in_progress().model_dump_json()}\n\n'
-	openai_tools: list[ChatCompletionToolUnionParam] = []
-	try:
-		openai_tools = convert_mcp_tools_to_openai_format(await list_mcp_tools())
-	except Exception as e:
-		print(f'Failed to get MCP tools: {e}')
 	try:
 		response: AsyncStream[ChatCompletionChunk]
-		if openai_tools:
-			response = await client.chat.completions.create(messages = messages, model = MODEL, stream = True, tools = openai_tools)
-		else:
+		try:
+			async with Client('http://127.0.0.1:8080/mcp/') as c:
+				response = await client.chat.completions.create(messages = messages, model = MODEL, stream = True, tools = map(getTool, await c.list_tools()))
+		except Exception as e:
 			response = await client.chat.completions.create(messages = messages, model = MODEL, stream = True)
 		llm_content = ''
 		tool_calls: list[ToolCall] = []
@@ -111,13 +123,13 @@ async def generateResponse(request_data: ChatRequest):
 						continue
 					if not current_tool_call:
 						current_tool_call = {
-							'index': tool_call_chunk.index,
-							'id': tool_call_chunk.id or '',
-							'type': 'function',
 							'function': {
 								'name': tool_call_chunk.function.name or '',
 								'arguments': tool_call_chunk.function.arguments or '',
 							},
+							'id': tool_call_chunk.id or '',
+							'index': tool_call_chunk.index,
+							'type': 'function',
 						}
 					elif tool_call_chunk.function.arguments:
 						current_tool_call['function']['arguments'] += tool_call_chunk.function.arguments
@@ -132,8 +144,8 @@ async def generateResponse(request_data: ChatRequest):
 				yield f'data: {reasoning_content_builder.complete().model_dump_json()}\n\n'
 				yield f'data: {reasoning_msg_builder.complete().model_dump_json()}\n\n'
 			messages.append({
-				'role': 'assistant',
 				'content': None,
+				'role': 'assistant',
 				'tool_calls': tool_calls,
 			})
 			for tool_call in tool_calls:
@@ -151,10 +163,16 @@ async def generateResponse(request_data: ChatRequest):
 				content = ''
 				try:
 					plugin_output_msg_builder = response_builder.create_message_builder(message_type = 'plugin_call_output')
-					tool_result = await call_mcp_tool(tool_name, tool_args)
+					async with Client('http://127.0.0.1:8080/mcp/') as c:
+						result = await c.call_tool(tool_name, tool_args)
+						for content_item in result.content:
+							if isinstance(content_item, TextContent):
+								content = dumps(content_item.text, ensure_ascii = False)
+								break
+							if isinstance(content_item, (AudioContent, ImageContent)):
+								content = dumps(content_item.data, ensure_ascii = False)
+								break
 					yield f'data: {plugin_output_msg_builder.get_message_data().model_dump_json()}\n\n'
-					if tool_result:
-						content = dumps(tool_result, ensure_ascii = False)
 					plugin_output_content_builder = plugin_output_msg_builder.create_content_builder(content_type = 'data')
 					yield f'data: {plugin_output_content_builder.add_data_delta({
 						'name': tool_name,
@@ -163,12 +181,11 @@ async def generateResponse(request_data: ChatRequest):
 					yield f'data: {plugin_output_content_builder.complete().model_dump_json()}\n\n'
 					yield f'data: {plugin_output_msg_builder.complete().model_dump_json()}\n\n'
 				except Exception as e:
-					print(f'Tool call failed: {e}')
 					content = f'Error: {e}'
 				messages.append({
+					'content': content,
 					'role': 'tool',
 					'tool_call_id': tool_call['id'],
-					'content': content,
 				})
 			final_response = await client.chat.completions.create(messages = messages, model = MODEL, stream = True)
 			final_msg_builder = response_builder.create_message_builder()
@@ -190,7 +207,6 @@ async def generateResponse(request_data: ChatRequest):
 			yield f'data: {msg_builder.complete().model_dump_json()}\n\n'
 		yield f'data: {response_builder.completed().model_dump_json()}\n\n'
 	except Exception as e:
-		print(f'Chat interface error: {e}')
 		error_msg_builder = response_builder.create_message_builder(message_type = 'error')
 		error_content_builder = error_msg_builder.create_content_builder()
 		yield f'data: {error_content_builder.add_text_delta(f'Error occurred: {str(e)}').model_dump_json()}\n\n'
@@ -199,7 +215,7 @@ async def generateResponse(request_data: ChatRequest):
 		yield f'data: {response_builder.completed().model_dump_json()}\n\n'
 
 @app.post('/process')
-async def chat(request_data: ChatRequest):
+def chat(request_data: ChatRequest):
 	'''
 	Chat interface implementation, supports LLM calls and MCP tool calls
 
@@ -215,4 +231,4 @@ async def chat(request_data: ChatRequest):
 
 if __name__ == '__main__':
 	from uvicorn import run
-	run('deploy_starter.main:app', port = 8080)
+	run(app, port = 8080)
