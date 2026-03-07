@@ -8,7 +8,7 @@ from mcp import Tool
 from mcp.types import AudioContent, ImageContent, TextContent
 from openai import AsyncOpenAI, AsyncStream
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageFunctionToolCallParam, ChatCompletionMessageParam, ChatCompletionToolUnionParam
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 from typing import Annotated, Any
 
 MODEL = 'qwen-plus'
@@ -28,11 +28,11 @@ def getTool(tool: Tool) -> ChatCompletionToolUnionParam:
 
 mcp = FastMCP()
 
-@mcp.tool(description = 'A simple addition tool example for calculating the sum of two integers', name = 'add Tool')
+@mcp.tool(description = 'A simple addition tool example for calculating the sum of two integers', name = 'add_Tool')
 def addNumbers(a: Annotated[int, Field(description='add a')], b: Annotated[int, Field(description='add b')]):
 	return a + b
 
-mcp_asgi_app = mcp.streamable_http_app('/')
+mcp_asgi_app = mcp.http_app('/')
 
 @asynccontextmanager
 async def lifespan(fastapi_app: FastAPI):
@@ -54,18 +54,16 @@ def healthCheck():
 
 class ContentItem(BaseModel):
 	data: dict[str, Any] | None = None
+	model_config = ConfigDict(extra = 'allow')
 	status: str | None = None
 	text: str | None = None
 	type: str
-	class Config:
-		extra = 'allow'
 
 class MessageItem(BaseModel):
 	content: list[ContentItem] | None = None
+	model_config = ConfigDict(extra = 'allow')
 	role: str
 	type: str | None = None
-	class Config:
-		extra = 'allow'
 
 def getMessage(msg: MessageItem) -> ChatCompletionMessageParam | None:
 	if not msg.content:
