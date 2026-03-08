@@ -1,3 +1,4 @@
+from agentscope_runtime.engine.app import AgentApp
 from agentscope_runtime.engine.helpers.agent_api_builder import ResponseBuilder
 from contextlib import asynccontextmanager
 from fastapi import FastAPI
@@ -40,7 +41,7 @@ async def lifespan(fastapi_app: FastAPI):
 	async with mcp_asgi_app.router.lifespan_context(fastapi_app):
 		yield
 
-app = FastAPI(lifespan = lifespan)
+app = AgentApp(lifespan = lifespan)
 
 app.mount('/mcp', mcp_asgi_app)
 

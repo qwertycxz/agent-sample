@@ -64,3 +64,4 @@ logs/
 
 # Agent-generated files
 **sessions_mount_dir/
+.agentscope_runtime
