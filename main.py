@@ -5,6 +5,7 @@ from fastapi import FastAPI
 from fastapi.responses import StreamingResponse
 from fastmcp import Client, FastMCP
 from json import dumps, loads
+from logging import getLogger
 from mcp import Tool
 from mcp.types import AudioContent, ImageContent, TextContent
 from openai import AsyncOpenAI, AsyncStream
@@ -12,6 +13,7 @@ from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageFunction
 from pydantic import BaseModel, ConfigDict, Field
 from typing import Annotated, Any
 
+LOGGER = getLogger('智能体')
 MODEL = 'qwen-plus'
 
 def getTool(tool: Tool) -> ChatCompletionToolUnionParam:
@@ -136,7 +138,7 @@ async def generateResponse(request_data: ChatRequest):
 			tool_calls.append(current_tool_call)
 		if tool_calls:
 			if llm_content.strip():
-				reasoning_msg_builder = (response_builder.create_message_builder(message_type = 'reasoning'))
+				reasoning_msg_builder = response_builder.create_message_builder(message_type = 'reasoning')
 				yield f'data: {reasoning_msg_builder.get_message_data().model_dump_json()}\n\n'
 				reasoning_content_builder = reasoning_msg_builder.create_content_builder()
 				yield f'data: {reasoning_content_builder.add_text_delta(llm_content).model_dump_json()}\n\n'
@@ -150,11 +152,10 @@ async def generateResponse(request_data: ChatRequest):
 			for tool_call in tool_calls:
 				plugin_call_msg_builder = response_builder.create_message_builder(message_type = 'plugin_call')
 				tool_args = loads(tool_call['function']['arguments'])
-				tool_name = tool_call['function']['name']
 				yield f'data: {plugin_call_msg_builder.get_message_data().model_dump_json()}\n\n'
 				plugin_call_content_builder = plugin_call_msg_builder.create_content_builder('data')
 				yield f'data: {plugin_call_content_builder.add_data_delta({
-					'name': tool_name,
+					'name': tool_call['function']['name'],
 					'arguments': dumps(tool_args, ensure_ascii = False),
 				}).model_dump_json()}\n\n'
 				yield f'data: {plugin_call_content_builder.complete().model_dump_json()}\n\n'
@@ -163,7 +164,9 @@ async def generateResponse(request_data: ChatRequest):
 				try:
 					plugin_output_msg_builder = response_builder.create_message_builder(message_type = 'plugin_call_output')
 					async with Client('http://127.0.0.1:8080/mcp/') as c:
-						result = await c.call_tool(tool_name, tool_args)
+						LOGGER.warning(f'工具调用（{tool_call['id']}）：{tool_call['function']['name']}')
+						LOGGER.debug(f'参数（{tool_call['id']}）：{tool_args}')
+						result = await c.call_tool(tool_call['function']['name'], tool_args)
 						for content_item in result.content:
 							if isinstance(content_item, TextContent):
 								content = dumps(content_item.text, ensure_ascii = False)
@@ -174,13 +177,15 @@ async def generateResponse(request_data: ChatRequest):
 					yield f'data: {plugin_output_msg_builder.get_message_data().model_dump_json()}\n\n'
 					plugin_output_content_builder = plugin_output_msg_builder.create_content_builder(content_type = 'data')
 					yield f'data: {plugin_output_content_builder.add_data_delta({
-						'name': tool_name,
+						'name': tool_call['function']['name'],
 						'output': content,
 					}).model_dump_json()}\n\n'
 					yield f'data: {plugin_output_content_builder.complete().model_dump_json()}\n\n'
 					yield f'data: {plugin_output_msg_builder.complete().model_dump_json()}\n\n'
+					LOGGER.debug(f'输出（{tool_call['id']}）：{content}')
 				except Exception as e:
 					content = f'Error: {e}'
+					LOGGER.debug(f'错误（{tool_call['id']}）：{e}')
 				messages.append({
 					'content': content,
 					'role': 'tool',
