@@ -11,10 +11,11 @@ from mcp.types import AudioContent, ImageContent, TextContent
 from openai import AsyncOpenAI, AsyncStream
 from openai.types.chat import ChatCompletionChunk, ChatCompletionMessageFunctionToolCallParam, ChatCompletionMessageParam, ChatCompletionToolUnionParam
 from pydantic import BaseModel, ConfigDict, Field
+from tiktoken import get_encoding
 from typing import Annotated, Any
 
 LOGGER = getLogger('智能体')
-MODEL = 'qwen-plus'
+MODEL = 'qwen3.5'
 
 def getTool(tool: Tool) -> ChatCompletionToolUnionParam:
 	description = ''
@@ -71,7 +72,7 @@ class MessageItem(BaseModel):
 def getMessage(msg: MessageItem) -> ChatCompletionMessageParam | None:
 	if not msg.content:
 		return
-	content_text = ''.join((content_item.text for content_item in msg.content if content_item.type == 'text' and content_item.text))
+	content_text = ''.join(content_item.text for content_item in msg.content if content_item.type == 'text' and content_item.text)
 	if not content_text:
 		return
 	if msg.role == 'user':
@@ -95,7 +96,7 @@ class ToolCall(ChatCompletionMessageFunctionToolCallParam):
 
 async def generateResponse(request_data: ChatRequest):
 	'''Generate streaming response - conforms to Bailian Response/Message/Content architecture'''
-	client = AsyncOpenAI(api_key = 'sk-d0973d254ce8479eb0ef6a7fbd59663d', base_url = 'https://dashscope.aliyuncs.com/compatible-mode/v1')
+	client = AsyncOpenAI(api_key = '', base_url = 'https://uni-api.cstcloud.cn/v1')
 	messages: list[ChatCompletionMessageParam] = [message for msg in request_data.input if (message := getMessage(msg))]
 	response_builder = ResponseBuilder(request_data.session_id, f'resp_{request_data.session_id}')
 	yield f'data: {response_builder.created().model_dump_json()}\n\n'
@@ -164,7 +165,7 @@ async def generateResponse(request_data: ChatRequest):
 				try:
 					plugin_output_msg_builder = response_builder.create_message_builder(message_type = 'plugin_call_output')
 					async with Client('http://127.0.0.1:8080/mcp/') as c:
-						LOGGER.warning(f'工具调用（{tool_call['id']}）：{tool_call['function']['name']}')
+						LOGGER.warning(f'工具调用（{request_data.session_id}）：{tool_call['function']['name']} - {tool_call['id']}')
 						LOGGER.debug(f'参数（{tool_call['id']}）：{tool_args}')
 						result = await c.call_tool(tool_call['function']['name'], tool_args)
 						for content_item in result.content:
@@ -199,6 +200,7 @@ async def generateResponse(request_data: ChatRequest):
 				if chunk.choices and len(chunk.choices) > 0:
 					choice = chunk.choices[0]
 					if choice.delta.content:
+						llm_content += choice.delta.content
 						yield f'data: {final_content_builder.add_text_delta(choice.delta.content).model_dump_json()}\n\n'
 			yield f'data: {final_content_builder.complete().model_dump_json()}\n\n'
 			yield f'data: {final_msg_builder.complete().model_dump_json()}\n\n'
@@ -209,6 +211,10 @@ async def generateResponse(request_data: ChatRequest):
 			yield f'data: {content_builder.add_text_delta(llm_content).model_dump_json()}\n\n'
 			yield f'data: {content_builder.complete().model_dump_json()}\n\n'
 			yield f'data: {msg_builder.complete().model_dump_json()}\n\n'
+		messages.append({
+			'content': llm_content,
+			'role': 'assistant',
+		})
 		yield f'data: {response_builder.completed().model_dump_json()}\n\n'
 	except Exception as e:
 		error_msg_builder = response_builder.create_message_builder(message_type = 'error')
@@ -217,6 +223,8 @@ async def generateResponse(request_data: ChatRequest):
 		yield f'data: {error_content_builder.complete().model_dump_json()}\n\n'
 		yield f'data: {error_msg_builder.complete().model_dump_json()}\n\n'
 		yield f'data: {response_builder.completed().model_dump_json()}\n\n'
+	encoding = get_encoding('o200k_base')
+	LOGGER.warning(f'估计消耗 Token（{request_data.session_id}）：{sum(len(encoding.encode(str(value))) for message in messages for value in message.values())}')
 
 @app.post('/process')
 def chat(request_data: ChatRequest):
