@@ -14,6 +14,9 @@ from pydantic import BaseModel, ConfigDict, Field
 from tiktoken import get_encoding
 from typing import Annotated, Any
 
+CLIENT = AsyncOpenAI(api_key = '', base_url = 'https://uni-api.cstcloud.cn/v1')
+MCP = 'http://127.0.0.1:8080/mcp/'
+
 LOGGER = getLogger('智能体')
 MODEL = 'qwen3.5'
 
@@ -96,7 +99,6 @@ class ToolCall(ChatCompletionMessageFunctionToolCallParam):
 
 async def generateResponse(request_data: ChatRequest):
 	'''Generate streaming response - conforms to Bailian Response/Message/Content architecture'''
-	client = AsyncOpenAI(api_key = '', base_url = 'https://uni-api.cstcloud.cn/v1')
 	messages: list[ChatCompletionMessageParam] = [message for msg in request_data.input if (message := getMessage(msg))]
 	response_builder = ResponseBuilder(request_data.session_id, f'resp_{request_data.session_id}')
 	yield f'data: {response_builder.created().model_dump_json()}\n\n'
@@ -104,10 +106,10 @@ async def generateResponse(request_data: ChatRequest):
 	try:
 		response: AsyncStream[ChatCompletionChunk]
 		try:
-			async with Client('http://127.0.0.1:8080/mcp/') as c:
-				response = await client.chat.completions.create(messages = messages, model = MODEL, stream = True, tools = map(getTool, await c.list_tools()))
+			async with Client(MCP) as c:
+				response = await CLIENT.chat.completions.create(messages = messages, model = MODEL, stream = True, tools = map(getTool, await c.list_tools()))
 		except Exception as e:
-			response = await client.chat.completions.create(messages = messages, model = MODEL, stream = True)
+			response = await CLIENT.chat.completions.create(messages = messages, model = MODEL, stream = True)
 		llm_content = ''
 		tool_calls: list[ToolCall] = []
 		current_tool_call: ToolCall | None = None
@@ -164,7 +166,7 @@ async def generateResponse(request_data: ChatRequest):
 				content = ''
 				try:
 					plugin_output_msg_builder = response_builder.create_message_builder(message_type = 'plugin_call_output')
-					async with Client('http://127.0.0.1:8080/mcp/') as c:
+					async with Client(MCP) as c:
 						LOGGER.warning(f'工具调用（{request_data.session_id}）：{tool_call['function']['name']} - {tool_call['id']}')
 						LOGGER.debug(f'参数（{tool_call['id']}）：{tool_args}')
 						result = await c.call_tool(tool_call['function']['name'], tool_args)
@@ -192,7 +194,7 @@ async def generateResponse(request_data: ChatRequest):
 					'role': 'tool',
 					'tool_call_id': tool_call['id'],
 				})
-			final_response = await client.chat.completions.create(messages = messages, model = MODEL, stream = True)
+			final_response = await CLIENT.chat.completions.create(messages = messages, model = MODEL, stream = True)
 			final_msg_builder = response_builder.create_message_builder()
 			yield f'data: {final_msg_builder.get_message_data().model_dump_json()}\n\n'
 			final_content_builder = final_msg_builder.create_content_builder()
