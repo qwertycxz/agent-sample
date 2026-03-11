@@ -55,10 +55,13 @@ async def query(self, msgs: Iterable[Msg], request: AgentRequest, response: Agen
 	agent = ReActAgent('生态环境智能体', '你是生态环境智能体', OpenAIChatModel('qwen3.5', '', client_kwargs = {
 		'base_url': 'https://uni-api.cstcloud.cn/v1',
 	}), OpenAIChatFormatter(), toolkit)
-	async for messages in stream_printing_messages([
-		agent,
-	], agent(msgs)):
-		yield messages
+	try:
+		async for messages in stream_printing_messages([
+			agent,
+		], agent(msgs)):
+			yield messages
+	except:
+		await agent.interrupt()
 
 if __name__ == '__main__':
 	app.run()
