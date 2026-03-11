@@ -1,5 +1,6 @@
 from collections.abc import Iterable
 from contextlib import asynccontextmanager
+from logging import getLogger
 
 from agentscope.agent import ReActAgent
 from agentscope.formatter import OpenAIChatFormatter
@@ -7,11 +8,15 @@ from agentscope.mcp import HttpStatelessClient
 from agentscope.message import Msg, TextBlock
 from agentscope.model import OpenAIChatModel
 from agentscope.pipeline import stream_printing_messages
+from agentscope.token import OpenAITokenCounter
 from agentscope.tool import ToolResponse, Toolkit
 from agentscope_runtime.engine.app import AgentApp
 from agentscope_runtime.engine.schemas.agent_schemas import AgentRequest, AgentResponse
 from agentscope_runtime.engine.tracing.base import EventContext
 from fastapi import FastAPI
+from tiktoken import get_encoding
+
+LOGGER = getLogger('智能体')
 
 def calculate(operator: str, operand1: float, operand2: float):
 	'''
@@ -38,23 +43,29 @@ def calculate(operator: str, operand1: float, operand2: float):
 		TextBlock(text = f'{result}', type = 'text')
 	])
 
+mcp = HttpStatelessClient('MCP', 'sse', '', {
+	'Authorization': 'Bearer '
+})
+
 toolkit = Toolkit()
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 	toolkit.register_tool_function(calculate)
-	await toolkit.register_mcp_client(HttpStatelessClient('MCP', 'sse', '', {
-		'Authorization': 'Bearer '
-	}))
+	await toolkit.register_mcp_client(mcp)
 	yield
 
 app = AgentApp(lifespan = lifespan)
+encoding = get_encoding('o200k_base')
+formatter = OpenAIChatFormatter()
+model = OpenAIChatModel('qwen3.5', '', client_kwargs = {
+	'base_url': 'https://uni-api.cstcloud.cn/v1',
+})
 
 @app.query()
 async def query(self, msgs: Iterable[Msg], request: AgentRequest, response: AgentResponse, trace_event: EventContext):
-	agent = ReActAgent('生态环境智能体', '你是生态环境智能体', OpenAIChatModel('qwen3.5', '', client_kwargs = {
-		'base_url': 'https://uni-api.cstcloud.cn/v1',
-	}), OpenAIChatFormatter(), toolkit)
+	agent = ReActAgent('生态环境智能体', '你是生态环境智能体', model, formatter, toolkit)
+	agent.set_console_output_enabled(False)
 	try:
 		async for messages in stream_printing_messages([
 			agent,
@@ -62,6 +73,7 @@ async def query(self, msgs: Iterable[Msg], request: AgentRequest, response: Agen
 			yield messages
 	except:
 		await agent.interrupt()
+	LOGGER.warning(f'估计消耗Token：{sum(len(encoding.encode(str(memory.content))) for memory in await agent.memory.get_memory())}')
 
 if __name__ == '__main__':
 	app.run()
