@@ -1,4 +1,5 @@
 from collections.abc import Iterable
+from contextlib import asynccontextmanager
 
 from agentscope.agent import ReActAgent
 from agentscope.formatter import OpenAIChatFormatter
@@ -10,8 +11,7 @@ from agentscope.tool import ToolResponse, Toolkit
 from agentscope_runtime.engine.app import AgentApp
 from agentscope_runtime.engine.schemas.agent_schemas import AgentRequest, AgentResponse
 from agentscope_runtime.engine.tracing.base import EventContext
-
-HttpStatelessClient
+from fastapi import FastAPI
 
 def calculate(operator: str, operand1: float, operand2: float):
 	'''
@@ -40,9 +40,15 @@ def calculate(operator: str, operand1: float, operand2: float):
 
 toolkit = Toolkit()
 
-toolkit.register_tool_function(calculate)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+	toolkit.register_tool_function(calculate)
+	await toolkit.register_mcp_client(HttpStatelessClient('MCP', 'sse', '', {
+		'Authorization': 'Bearer '
+	}))
+	yield
 
-app = AgentApp()
+app = AgentApp(lifespan = lifespan)
 
 @app.query()
 async def query(self, msgs: Iterable[Msg], request: AgentRequest, response: AgentResponse, trace_event: EventContext):
