@@ -47,8 +47,7 @@ def calculate(operator: str, operand1: float, operand2: float):
 	])
 
 # 科技云知识库查询，以本地工具调用的形式提供给智能体使用；如要使用多个知识库，可以创建多个 CSTKnowledgeBase 实例，并注册到 toolkit 中
-KNOWLEDGE = 'AI电子书'
-knowledge = CSTKnowledgeBase('Bearer ', '', KNOWLEDGE)
+knowledge = CSTKnowledgeBase('Bearer ', '', '')
 
 # MCP 客户端，请按需调整，参考文档：https://doc.agentscope.io/zh_CN/tutorial/task_mcp.html
 mcp = HttpStatelessClient('MCP', 'sse', '', {
@@ -67,8 +66,8 @@ async def lifespan(app: FastAPI):
 	'''
 	# 一般本地工具
 	toolkit.register_tool_function(calculate)
-	# 科技云知识库
-	toolkit.register_tool_function(knowledge.retrieve_knowledge, func_description = KNOWLEDGE)
+	# 科技云知识库，可自行微调提示词
+	toolkit.register_tool_function(knowledge.retrieve_knowledge, func_description = '知识库\n名称：\n描述：')
 	# 外部 MCP
 	await toolkit.register_mcp_client(mcp)
 	yield
