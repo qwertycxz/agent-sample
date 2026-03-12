@@ -81,7 +81,7 @@ model = OpenAIChatModel('qwen3.5', '', client_kwargs = {
 })
 
 @app.query()
-async def query(self, msgs: Iterable[Msg], request: AgentRequest, response: AgentResponse, trace_event: EventContext):
+async def query(self: AgentApp, msgs: Iterable[Msg], request: AgentRequest, response: AgentResponse, trace_event: EventContext):
 	'''
 	智能体处理函数，接收用户输入的消息，返回智能体的回复消息
 
