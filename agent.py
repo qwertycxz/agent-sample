@@ -8,13 +8,14 @@ from agentscope.mcp import HttpStatelessClient
 from agentscope.message import Msg, TextBlock
 from agentscope.model import OpenAIChatModel
 from agentscope.pipeline import stream_printing_messages
-from agentscope.token import OpenAITokenCounter
 from agentscope.tool import ToolResponse, Toolkit
 from agentscope_runtime.engine.app import AgentApp
 from agentscope_runtime.engine.schemas.agent_schemas import AgentRequest, AgentResponse
 from agentscope_runtime.engine.tracing.base import EventContext
 from fastapi import FastAPI
 from tiktoken import get_encoding
+
+from cst import CSTKnowledgeBase
 
 LOGGER = getLogger('智能体')
 
@@ -43,6 +44,9 @@ def calculate(operator: str, operand1: float, operand2: float):
 		TextBlock(text = f'{result}', type = 'text')
 	])
 
+KNOWLEDGE = 'AI电子书'
+knowledge = CSTKnowledgeBase('Bearer ', '', KNOWLEDGE)
+
 mcp = HttpStatelessClient('MCP', 'sse', '', {
 	'Authorization': 'Bearer '
 })
@@ -52,6 +56,7 @@ toolkit = Toolkit()
 @asynccontextmanager
 async def lifespan(app: FastAPI):
 	toolkit.register_tool_function(calculate)
+	toolkit.register_tool_function(knowledge.retrieve_knowledge, func_description = KNOWLEDGE)
 	await toolkit.register_mcp_client(mcp)
 	yield
 
