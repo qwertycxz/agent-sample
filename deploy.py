@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 from agentscope_runtime.engine.deployers.kubernetes_deployer import K8sConfig, KubernetesDeployManager
 from agentscope_runtime.engine.deployers.utils.docker_image_utils.docker_image_builder import RegistryConfig
 from asyncio import run

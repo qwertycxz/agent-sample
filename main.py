@@ -1,3 +1,4 @@
+#!/usr/bin/env python
 from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from logging import getLogger
