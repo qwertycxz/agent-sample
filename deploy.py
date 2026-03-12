@@ -6,9 +6,7 @@ from main import app
 async def deploy2K8s():
 	'''将 AgentApp 部署到 Kubernetes'''
 	deployer = KubernetesDeployManager(K8sConfig(k8s_namespace = 'agentscope-runtime', kubeconfig_path = None), RegistryConfig(registry_url = 'localhost'))
-	return await app.deploy(deployer, base_image = 'python:3', platform = 'linux/amd64', port = 8080, requirements = [
-		'fastmcp',
-	], runtime_config = {
+	return await app.deploy(deployer, base_image = 'python:3', platform = 'linux/amd64', port = 8080, runtime_config = {
 		'image_pull_policy': 'Always',
 	}), deployer
 
