@@ -102,7 +102,7 @@ async def query(self: AgentApp, msgs: Iterable[Msg], request: AgentRequest, resp
 		], agent(msgs)):
 			yield messages
 	except:
-		# 如果用户手动断开连接，那我们就终端智能体
+		# 如果用户手动断开连接，那我们就中断智能体
 		await agent.interrupt()
 	LOGGER.warning(f'估计消耗Token：{sum(len(encoding.encode(str(memory.content))) for memory in await agent.memory.get_memory())}')
 
