@@ -1,6 +1,6 @@
 # 智能体示例
 
-这是一个使用 [AgentScope](https://www.agentscope.com/) 构建的智能体示例项目，展示了如何创建一个简单的智能体应用。
+这是一个使用 [AgentScope](https://doc.agentscope.io/zh_CN/index.html) 构建的智能体示例项目，展示了如何创建一个简单的智能体应用。
 
 ## 安装依赖
 
