@@ -3,6 +3,7 @@ from typing import Any
 
 from agentscope.message import TextBlock
 from agentscope.rag import DocMetadata, Document, KnowledgeBase
+from agentscope.tool import ToolResponse
 from aiohttp import ClientSession
 
 class CSTKnowledgeBase(KnowledgeBase):
@@ -34,3 +35,30 @@ class CSTKnowledgeBase(KnowledgeBase):
 				},
 			}) as p:
 				return [Document(DocMetadata(TextBlock(text = f'{record['content']}', type = 'text'), record['title'], 0, 0), score = record['score']) for record in (await p.json())['records']]
+
+
+# 本地工具调用函数，必须提供详细的 docstring（就是这些三引号括起来的注释），以便智能体能够正确使用工具
+def calculate(operator: str, operand1: float, operand2: float):
+	'''
+	四则运算计算器
+
+	Args:
+		operator (str): 运算符，可为加（+）、减（-）、乘（*）、除（/）
+		operand1 (float): 操作数1
+		operand2 (float): 操作数2
+	'''
+	result: float
+	match operator:
+		case '+':
+			result = operand1 + operand2
+		case '-':
+			result = operand1 - operand2
+		case '*':
+			result = operand1 * operand2
+		case '/':
+			result = operand1 / operand2
+		case _:
+			raise ValueError(f'运算符不支持: {operator}')
+	return ToolResponse([
+		TextBlock(text = f'{result}', type = 'text')
+	])

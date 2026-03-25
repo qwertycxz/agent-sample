@@ -5,54 +5,19 @@ from logging import getLogger
 
 from agentscope.agent import ReActAgent
 from agentscope.formatter import OpenAIChatFormatter
-from agentscope.mcp import HttpStatelessClient
-from agentscope.message import Msg, TextBlock
+from agentscope.message import Msg
 from agentscope.model import OpenAIChatModel
 from agentscope.pipeline import stream_printing_messages
-from agentscope.tool import ToolResponse, Toolkit
+from agentscope.tool import Toolkit
 from agentscope_runtime.engine.app import AgentApp
 from agentscope_runtime.engine.schemas.agent_schemas import AgentRequest, AgentResponse
 from agentscope_runtime.engine.tracing.base import EventContext
 from fastapi import FastAPI
 from tiktoken import get_encoding
 
-from cst import CSTKnowledgeBase
+from cst import calculate
 
 LOGGER = getLogger('智能体')
-
-# 本地工具调用函数，必须提供详细的 docstring（就是这些三引号括起来的注释），以便智能体能够正确使用工具
-def calculate(operator: str, operand1: float, operand2: float):
-	'''
-	四则运算计算器
-
-	Args:
-		operator (str): 运算符，可为加（+）、减（-）、乘（*）、除（/）
-		operand1 (float): 操作数1
-		operand2 (float): 操作数2
-	'''
-	result: float
-	match operator:
-		case '+':
-			result = operand1 + operand2
-		case '-':
-			result = operand1 - operand2
-		case '*':
-			result = operand1 * operand2
-		case '/':
-			result = operand1 / operand2
-		case _:
-			raise ValueError(f'运算符不支持: {operator}')
-	return ToolResponse([
-		TextBlock(text = f'{result}', type = 'text')
-	])
-
-# 科技云知识库查询，以本地工具调用的形式提供给智能体使用；如要使用多个知识库，可以创建多个 CSTKnowledgeBase 实例，并注册到 toolkit 中
-knowledge = CSTKnowledgeBase('Bearer ', '', '')
-
-# MCP 客户端，请按需调整，参考文档：https://doc.agentscope.io/zh_CN/tutorial/task_mcp.html
-mcp = HttpStatelessClient('MCP', 'sse', '', {
-	'Authorization': 'Bearer '
-})
 
 toolkit = Toolkit()
 
@@ -66,10 +31,7 @@ async def lifespan(app: FastAPI):
 	'''
 	# 一般本地工具
 	toolkit.register_tool_function(calculate)
-	# 科技云知识库，可自行微调提示词
-	toolkit.register_tool_function(knowledge.retrieve_knowledge, func_description = '知识库\n名称：\n描述：')
-	# 外部 MCP
-	await toolkit.register_mcp_client(mcp)
+	LOGGER.info(f'已注册工具：{calculate}')
 	yield
 
 # 这里执行一些初始化工作
