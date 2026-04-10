@@ -67,7 +67,7 @@ async def lifespan(app: FastAPI):
 	# 一般本地工具
 	toolkit.register_tool_function(calculate)
 	# 科技云知识库，可自行微调提示词
-	toolkit.register_tool_function(knowledge.retrieve_knowledge, func_description = '知识库\n名称：\n描述：')
+	toolkit.register_tool_function(knowledge.retrieve_knowledge, func_description = '知识库\n名称：\n描述：', func_name = 'knowledge')
 	# 外部 MCP
 	await toolkit.register_mcp_client(mcp)
 	yield
