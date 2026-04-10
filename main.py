@@ -80,6 +80,7 @@ model = OpenAIChatModel('qwen3.5', '', client_kwargs = {
 	'base_url': 'https://uni-api.cstcloud.cn/v1',
 })
 
+# `@app.query()` 默认使用的是 `POST /process`，并且使用的是 AgentScope 自己的一套框架，文档在 https://runtime.agentscope.io/v1.1.0/zh/protocol.html
 @app.query()
 async def query(self: AgentApp, msgs: Iterable[Msg], request: AgentRequest, response: AgentResponse, trace_event: EventContext):
 	'''
@@ -107,5 +108,6 @@ async def query(self: AgentApp, msgs: Iterable[Msg], request: AgentRequest, resp
 	LOGGER.warning(f'估计消耗Token：{sum(len(encoding.encode(str(memory.content))) for memory in await agent.memory.get_memory())}')
 
 # 可以在本地执行 `python main.py` 来启动服务，建议在发布前先在本地进行测试
+# 可以直接将前端挂载到 `/`，但是注意默认情况下 `/` 和 `/health` 已被 `AgentApp._setup_builtin_routes` 占用，继承并覆盖这个方法即可
 if __name__ == '__main__':
 	app.run()
