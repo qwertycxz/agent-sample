@@ -2,6 +2,7 @@
 from collections.abc import Iterable
 from contextlib import asynccontextmanager
 from logging import getLogger
+from os import environ
 
 from agentscope.agent import ReActAgent
 from agentscope.formatter import OpenAIChatFormatter
@@ -47,7 +48,7 @@ def calculate(operator: str, operand1: float, operand2: float):
 	])
 
 # 科技云知识库查询，以本地工具调用的形式提供给智能体使用；如要使用多个知识库，可以创建多个 CSTKnowledgeBase 实例，并注册到 toolkit 中
-knowledge = CSTKnowledgeBase('Bearer ', '', '')
+knowledge = CSTKnowledgeBase('', '')
 
 # MCP 客户端，请按需调整，参考文档：https://doc.agentscope.io/zh_CN/tutorial/task_mcp.html
 mcp = HttpStatelessClient('MCP', 'sse', '', {
@@ -76,8 +77,8 @@ async def lifespan(app: FastAPI):
 app = AgentApp(lifespan = lifespan)
 encoding = get_encoding('o200k_base')
 formatter = OpenAIChatFormatter()
-model = OpenAIChatModel('qwen3.5', '', client_kwargs = {
-	'base_url': 'https://uni-api.cstcloud.cn/v1',
+model = OpenAIChatModel(environ['OPENAI_MODEL_NAME'], environ['OPENAI_API_KEY'], client_kwargs = {
+	'base_url': environ['OPENAI_BASE_URL'],
 })
 
 # `@app.query()` 默认使用的是 `POST /process`，并且使用的是 AgentScope 自己的一套框架，文档在 https://runtime.agentscope.io/v1.1.0/zh/protocol.html

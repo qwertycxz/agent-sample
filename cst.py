@@ -1,4 +1,5 @@
 from logging import getLogger
+from os import environ
 from typing import Any
 
 from agentscope.message import TextBlock
@@ -8,15 +9,13 @@ from aiohttp import ClientSession
 class CSTKnowledgeBase(KnowledgeBase):
 	LOGGER = getLogger('科技云知识库')
 
-	def __init__(self, authorization: str, id: str, name: str):
+	def __init__(self, id: str, name: str):
 		'''
 		初始化科技云知识库
 		Args:
-			authorization: 访问科技云知识库的授权令牌，格式为`Bearer ak-ou-aB3kF9mN2pQ7rS5tU8vW1xY4zA6cE0gH`
-			id: 知识库ID
-			name: 知识库名称
+			id: 知识库ID，用于 API 调用
+			name: 知识库名称，用于日志记录
 		'''
-		self.authorization = authorization
 		self.id = id
 		self.name = name
 
@@ -24,7 +23,7 @@ class CSTKnowledgeBase(KnowledgeBase):
 		self.LOGGER.info(f'查询 {self.name}: {query}')
 		async with ClientSession() as s:
 			async with s.post('https://kb.cstcloud.cn/api/user/resource/kbs/dify/retrieval', headers = {
-				'Authorization': self.authorization,
+				'Authorization': environ['CST_KB_AUTHORIZATION'],
 			}, json = {
 				'knowledge_id': self.id,
 				'query': query,
