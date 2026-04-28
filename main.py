@@ -98,7 +98,7 @@ async def query(self: AgentApp, msgs: Iterable[Msg], request: AgentRequest, resp
 	# 如果不需要输出控制台日志，可以关闭；如果需要调试，可以打开
 	agent.set_console_output_enabled(False)
 	try:
-		# 大模型的流式输出
+		# 大模型的流式输出，这里的 message 的类型是Tuple[Msg, bool]
 		async for messages in stream_printing_messages([
 			agent,
 		], agent(msgs)):
