@@ -23,7 +23,7 @@ class CSTKnowledgeBase(KnowledgeBase):
 		self.LOGGER.info(f'查询 {self.name}: {query}')
 		async with ClientSession() as s:
 			async with s.post('https://kb.cstcloud.cn/api/user/resource/kbs/dify/retrieval', headers = {
-				'Authorization': environ['CST_KB_AUTHORIZATION'],
+				'Authorization': f'Bearer {environ['CST_KB_KEY']}',
 			}, json = {
 				'knowledge_id': self.id,
 				'query': query,
