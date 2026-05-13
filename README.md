@@ -20,7 +20,7 @@ pip install agentscope-runtime
 ## 项目结构
 
 * `cst.py` - 封装了科技云知识库
-* `main.py` - 智能体应用的主文件，定义了智能体的行为和处理逻辑
+* `main.py` - 一个极简的 FastAPI 认证系统
 * `deploy.py` - 部署到 k8s 的参考
 
 运行 `python main.py` 即可启动智能体应用。

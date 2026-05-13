@@ -1,114 +1,256 @@
 #!/usr/bin/env python
-from collections.abc import Iterable
-from contextlib import asynccontextmanager
-from logging import getLogger
-from os import environ
+from asyncio import TimerHandle, get_event_loop
+from base64 import b64decode, b64encode
+from hashlib import pbkdf2_hmac
+from hmac import compare_digest
+from http.client import CONFLICT, FORBIDDEN, NOT_FOUND, UNAUTHORIZED
+from os import urandom
+from typing import Annotated, TypedDict
 
-from agentscope.agent import ReActAgent
-from agentscope.formatter import OpenAIChatFormatter
-from agentscope.mcp import HttpStatelessClient
-from agentscope.message import Msg, TextBlock
-from agentscope.model import OpenAIChatModel
-from agentscope.pipeline import stream_printing_messages
-from agentscope.tool import ToolResponse, Toolkit
-from agentscope_runtime.engine.app import AgentApp
-from agentscope_runtime.engine.schemas.agent_schemas import AgentRequest, AgentResponse
-from agentscope_runtime.engine.tracing.base import EventContext
-from fastapi import FastAPI
-from tiktoken import get_encoding
+from agentscope_runtime.engine import AgentApp
+from fastapi import Body, Depends, HTTPException, Request, Response
+from sqlalchemy import String, create_engine, select
+from sqlalchemy.orm import DeclarativeBase, Mapped, MappedAsDataclass, Session, mapped_column, sessionmaker
 
-from cst import CSTKnowledgeBase
-
-LOGGER = getLogger('智能体')
-
-# 本地工具调用函数，必须提供详细的 docstring（就是这些三引号括起来的注释），以便智能体能够正确使用工具
-def calculate(operator: str, operand1: float, operand2: float):
+def hmac(password: bytes, salt: bytes):
 	'''
-	四则运算计算器
-
+	计算登录用密码哈希值的全局函数
 	Args:
-		operator (str): 运算符，可为加（+）、减（-）、乘（*）、除（/）
-		operand1 (float): 操作数1
-		operand2 (float): 操作数2
+		password (bytes): 密码
+		salt (bytes): 盐值
+	Returns:
+		密码哈希值
 	'''
-	result: float
-	match operator:
-		case '+':
-			result = operand1 + operand2
-		case '-':
-			result = operand1 - operand2
-		case '*':
-			result = operand1 * operand2
-		case '/':
-			result = operand1 / operand2
-		case _:
-			raise ValueError(f'运算符不支持: {operator}')
-	return ToolResponse([
-		TextBlock(text = f'{result}', type = 'text')
-	])
+	return pbkdf2_hmac('blake2b', password, salt, 100000)
 
-# 科技云知识库查询，以本地工具调用的形式提供给智能体使用；如要使用多个知识库，可以创建多个 CSTKnowledgeBase 实例，并注册到 toolkit 中
-knowledge = CSTKnowledgeBase('', '')
-
-# MCP 客户端，请按需调整，参考文档：https://doc.agentscope.io/zh_CN/tutorial/task_mcp.html
-mcp = HttpStatelessClient('MCP', 'sse', '', {
-	'Authorization': 'Bearer '
-})
-
-toolkit = Toolkit()
-
-@asynccontextmanager
-async def lifespan(app: FastAPI):
+class Base(DeclarativeBase, MappedAsDataclass):
 	'''
-	在服务启动前（yield前）和服务结束后（yield后）执行一些代码；建议在这里注册工具调用
-
-	Args:
-		app: FastAPI应用实例
+	SQLAlchemy 基类，启用数据类功能
 	'''
-	# 一般本地工具
-	toolkit.register_tool_function(calculate)
-	# 科技云知识库，可自行微调提示词
-	toolkit.register_tool_function(knowledge.retrieve_knowledge, func_description = '知识库\n名称：\n描述：', func_name = 'knowledge')
-	# 外部 MCP
-	await toolkit.register_mcp_client(mcp)
-	yield
+	pass
 
-# 这里执行一些初始化工作
-app = AgentApp(lifespan = lifespan)
-encoding = get_encoding('o200k_base')
-formatter = OpenAIChatFormatter()
-model = OpenAIChatModel(environ['OPENAI_MODEL_NAME'], environ['OPENAI_API_KEY'], client_kwargs = {
-	'base_url': environ['OPENAI_BASE_URL'],
-})
-
-# `@app.query()` 默认使用的是 `POST /process`，并且使用的是 AgentScope 自己的一套框架，文档在 https://runtime.agentscope.io/v1.1.0/zh/protocol.html
-@app.query()
-async def query(self: AgentApp, msgs: Iterable[Msg], request: AgentRequest, response: AgentResponse, trace_event: EventContext):
+class SessionStore(TypedDict):
 	'''
-	智能体处理函数，接收用户输入的消息，返回智能体的回复消息
-
-	Args:
-		msgs: 用户输入的消息列表
-		request: AgentRequest对象，包含请求的相关信息
-		response: AgentResponse对象，用于设置回复消息和其他响应信息
-		trace_event: EventContext对象，用于记录智能体处理过程中的事件和日志
+	暂存在内存内的会话信息
 	'''
-	# 每次都创建一个新 Agent，保证每次请求都是独立的；如果需要在请求之间共享一些状态，可以考虑使用 Agent.memory 或者其他持久化存储，见 https://doc.agentscope.io/zh_CN/tutorial/task_memory.html
-	agent = ReActAgent('生态环境智能体', '你是生态环境智能体', model, formatter, toolkit)
-	# 如果不需要输出控制台日志，可以关闭；如果需要调试，可以打开
-	agent.set_console_output_enabled(False)
+	expire: TimerHandle
+	user: User
+
+class User(Base):
+	'''
+	用户模型
+	'''
+	__tablename__ = 'users'
+	id: Mapped[int] = mapped_column(comment='ID', init=False, primary_key=True)
+	name: Mapped[str] = mapped_column(String(100), comment='用户名', nullable=False, unique=True)
+	password: Mapped[bytes] = mapped_column(comment='密码', nullable=False)
+	salt: Mapped[bytes] = mapped_column(comment='密码盐值', nullable=False)
+	admin: Mapped[bool] = mapped_column(comment='是否管理员', nullable=False, default=False)
+
+engine = create_engine('mysql+mysqlconnector://root@127.0.0.1/tender')
+makeDatabase = sessionmaker(engine)
+
+def getDatabase():
+	'''
+	从池中获取一个连接，生成器关闭时自动归还连接
+
+	Yields:
+		一个数据库连接
+	'''
+	database = makeDatabase()
 	try:
-		# 大模型的流式输出，这里的 message 的类型是Tuple[Msg, bool]
-		async for messages in stream_printing_messages([
-			agent,
-		], agent(msgs)):
-			yield messages
-	except:
-		# 如果用户手动断开连接，那我们就中断智能体
-		await agent.interrupt()
-	LOGGER.warning(f'估计消耗Token：{sum(len(encoding.encode(str(memory.content))) for memory in await agent.memory.get_memory())}')
+		yield database
+	finally:
+		database.close()
 
-# 可以在本地执行 `python main.py` 来启动服务，建议在发布前先在本地进行测试
-# 可以直接将前端挂载到 `/`，但是注意默认情况下 `/` 和 `/health` 已被 `AgentApp._setup_builtin_routes` 占用，继承并覆盖这个方法即可
+sessions: dict[bytes, SessionStore] = {}
+def getUser(request: Request):
+	'''
+	从请求的 Cookie 中获取会话信息，验证后返回用户对象
+
+	Args:
+		request: 当前请求对象
+
+	Raises:
+		HTTPException: 如果没有有效的会话信息，抛出 401
+
+	Returns:
+		和数据库分离的用户对象
+	'''
+	if 'session' not in request.cookies:
+		raise HTTPException(UNAUTHORIZED, '您尚未登录！')
+	session = b64decode(request.cookies['session'])
+	if session in sessions:
+		return sessions[session]['user']
+	raise HTTPException(UNAUTHORIZED, '请重新登录！')
+
+app = AgentApp()
+
+@app.delete('/auth')
+def logout(user: User = Depends(getUser)):
+	'''
+	退出登录
+
+	Args:
+		user: 当前用户对象
+	'''
+	for token, session in list(sessions.items()):
+		if session['user'].id == user.id:
+			session['expire'].cancel()
+			sessions.pop(token, None)
+
+@app.post('/auth')
+async def login(name: Annotated[str, Body()], password: Annotated[bytes, Body()], response: Response, database: Session = Depends(getDatabase)):
+	'''
+	登录
+
+	Args:
+		name: 用户名
+		password: 密码
+		response: 当前响应对象
+		database: 数据库连接
+
+	Raises:
+		HTTPException: 如果用户名不存在，抛出 404；如果密码错误，抛出 401
+
+	Returns:
+		一个包含用户 ID 和管理员状态的字典
+	'''
+	user = database.execute(select(User).where(User.name == name)).scalar()
+	if not user:
+		raise HTTPException(NOT_FOUND, '用户不存在！')
+
+	if not compare_digest(hmac(password, user.salt), user.password):
+		raise HTTPException(UNAUTHORIZED, '密码错误！')
+
+	# token = str(uuid4())
+	token = urandom(16)
+	sessions[token] = {
+		'expire': get_event_loop().call_later(1000000, lambda: sessions.pop(token, None)),
+		'user': user
+	}
+
+	response.set_cookie('session', b64encode(token).decode())
+	return {
+		'admin': user.admin,
+		'id': user.id
+	}
+
+@app.delete('/user')
+def deleteUser(name: Annotated[str, Body(embed=True)], database: Session = Depends(getDatabase), user: User = Depends(getUser)):
+	'''
+	删除用户
+
+	Args:
+		name: 用户名
+		database: 数据库连接
+		user: 当前用户对象
+
+	Raises:
+		HTTPException: 如果当前用户不是管理员，抛出 403；如果欲删除用户不存在，抛出 404
+	'''
+	if not user.admin:
+		raise HTTPException(FORBIDDEN, '权限不足！')
+
+	deleted = database.execute(select(User).where(User.name == name)).scalar()
+	if not deleted:
+		raise HTTPException(NOT_FOUND, '用户不存在！')
+
+	database.delete(deleted)
+	database.commit()
+	logout(deleted)
+
+@app.get('/user')
+def listUsers(database: Session = Depends(getDatabase), user: User = Depends(getUser)):
+	'''
+	列出所有用户
+
+	Args:
+		database: 数据库连接
+		user: 当前用户对象
+
+	Raises:
+		HTTPException: 如果当前用户不是管理员，抛出 403
+
+	Returns:
+		一个包含所有用户 ID、用户名和管理员状态的列表
+	'''
+	if not user.admin:
+		raise HTTPException(FORBIDDEN, '权限不足！')
+	return database.execute(select(User.admin, User.id, User.name)).mappings().all()
+
+@app.post('/user')
+def register(name: Annotated[str, Body()], password: Annotated[bytes, Body()], admin: Annotated[bool, Body()] = False, database: Session = Depends(getDatabase), user: User = Depends(getUser)):
+	'''
+	注册用户
+
+	Args:
+		name: 用户名
+		password: 密码
+		admin: 是否为管理员
+		database: 数据库连接
+		user: 当前用户对象
+
+	Raises:
+		HTTPException: 如果当前用户不是管理员或用户已存在，抛出 409
+
+	Returns:
+		一个包含新用户 ID 的字典
+	'''
+	if not user.admin or database.execute(select(User).where(User.name == name)).scalar():
+		raise HTTPException(CONFLICT, '用户已存在！')
+
+	salt = urandom(16)
+	registered = User(name, hmac(password, salt), salt, admin)
+
+	database.add(registered)
+	database.commit()
+
+	return {
+		'id': registered.id
+	}
+
+@app.put('/user')
+def updateUser(name: Annotated[str, Body()], admin: Annotated[bool | None, Body()] = None, password: Annotated[bytes | None, Body()] = None, database: Session = Depends(getDatabase), user: User = Depends(getUser)):
+	'''
+	更新用户信息
+
+	Args:
+		name: 用户名
+		admin: 管理员状态
+		password: 密码
+		database: 数据库连接
+		user: 当前用户对象
+
+	Raises:
+		HTTPException: 如果当前用户不是管理员且尝试修改其他用户的信息，抛出 403；如果欲修改用户不存在，抛出 404
+
+	Returns:
+		一个包含更新后用户 ID 和管理员状态的字典
+	'''
+	if not user.admin and (name != user.name or admin is not None):
+		raise HTTPException(FORBIDDEN, '这不是你自己！')
+
+	updated = database.execute(select(User).where(User.name == name)).scalar()
+	if not updated:
+		raise HTTPException(NOT_FOUND, '用户不存在！')
+
+	if admin is not None:
+		updated.admin = admin
+
+	if password:
+		salt = urandom(16)
+		updated.password = hmac(password, salt)
+		updated.salt = salt
+
+	database.commit()
+	logout(updated)
+
+	return {
+		'admin': updated.admin,
+		'id': updated.id
+	}
+
 if __name__ == '__main__':
+	Base.metadata.create_all(engine)
 	app.run()
